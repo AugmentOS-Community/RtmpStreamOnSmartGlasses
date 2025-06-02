@@ -110,6 +110,12 @@
 
             <div class="stream-actions">
                 <h2>Stream Actions</h2>
+                <div style="margin-bottom: 15px;">
+                    <label>
+                        <input type="checkbox" id="highlightFacesCheckbox" style="margin-right: 8px;">
+                        Highlight Faces
+                    </label>
+                </div>
                 <button id="startStreamButton" class="btn-start">Start Stream</button>
                 <button id="stopStreamButton" class="btn-stop">Stop Stream</button>
             </div>
@@ -135,6 +141,7 @@
         const streamStatsDiv = document.getElementById('streamStats');
         const currentStatusTextDiv = document.getElementById('currentStatusText');
         const messageArea = document.getElementById('messageArea');
+        const highlightFacesCheckbox = document.getElementById('highlightFacesCheckbox');
 
         const currentUserId = '<%= userId %>'; // Will be empty if not authenticated
 
@@ -219,12 +226,16 @@
             startStreamButton.addEventListener('click', async () => {
                 if (!currentUserId) { showMessage('Not authenticated. Cannot start stream.', true); return; }
                 const currentRtmpUrl = rtmpUrlInput ? rtmpUrlInput.value : null;
+                const highlightFaces = highlightFacesCheckbox ? highlightFacesCheckbox.checked : false;
                 showMessage('Requesting to start stream...');
                 try {
                     const response = await fetch('/api/start-stream', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ rtmpUrl: currentRtmpUrl }) // Send current URL from input
+                        body: JSON.stringify({ 
+                            rtmpUrl: currentRtmpUrl,
+                            highlightFaces: highlightFaces
+                        })
                     });
                     const result = await response.json();
                     if (result.success) {

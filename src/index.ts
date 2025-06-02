@@ -113,17 +113,53 @@ class ExampleAugmentOSApp extends TpaServer {
   public streamStoppedStatus: RtmpStreamStatus = { type: GlassesToCloudMessageType.RTMP_STREAM_STATUS, status: 'stopped', timestamp: new Date() };
 
   // Method to start stream for a user
-  public async startStreamForUser(userId: string, rtmpUrl?: string): Promise<void> {
+  public async startStreamForUser(userId: string, rtmpUrl?: string, highlightFaces?: boolean): Promise<void> {
     const userState = this.activeUserStates.get(userId);
     if (!userState) {
       console.error("No active session for user:", userId);
       throw new Error("No active session for user to start stream.");
     }
-    const urlToUse = rtmpUrl || userState.rtmpUrl || this.defaultRtmpUrl;
+    let urlToUse = rtmpUrl || userState.rtmpUrl || this.defaultRtmpUrl;
+    
+    // If face highlighting is enabled, configure the face recognition server
+    if (highlightFaces) {
+      try {
+        // Generate a unique stream key for this user
+        const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
+        const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+        
+        // Configure the face recognition server
+        const configResponse = await fetch(`${faceRecognitionServerUrl}/api/config/${streamKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            output_rtmp: urlToUse, // The face recognition server will output to the user's RTMP URL
+            detect_every: 5, // Detect faces every 3 frames for performance
+            similarity_threshold: 0.3 // Reasonable threshold for face matching
+          })
+        });
+        
+        if (!configResponse.ok) {
+          throw new Error(`Failed to configure face recognition: ${configResponse.statusText}`);
+        }
+        
+        const configResult = await configResponse.json();
+        console.log(`Face recognition configured for user ${userId}:`, configResult);
+        
+        // Update the URL to stream to the face recognition server instead
+        urlToUse = `rtmp://146.190.174.202:8080/live/${streamKey}`;
+        console.log(`Streaming to face recognition server at: ${urlToUse}`);
+        
+      } catch (error: any) {
+        console.error(`Failed to configure face recognition for user ${userId}:`, error);
+        throw new Error(`Failed to configure face recognition: ${error.message}`);
+      }
+    }
+    
     userState.rtmpUrl = urlToUse; // Update the user's state with the URL being used
 
     console.log(`Attempting to start stream for user ${userId} to URL ${urlToUse}`);
-    userState.session.layouts.showTextWall("Starting RTMP stream via web...");
+    userState.session.layouts.showTextWall(highlightFaces ? "Starting RTMP stream with face highlighting..." : "Starting RTMP stream via web...");
     try {
       await userState.session.streaming.requestStream({
         rtmpUrl: urlToUse,
@@ -178,7 +214,7 @@ class ExampleAugmentOSApp extends TpaServer {
     this.activeUserStates.set(userId, userState);
 
     console.log(`User ${userId} restored with RTMP URL: ${userRtmpUrl}`);
-    session.layouts.showTextWall("Example Photo App Ready!");
+    session.layouts.showTextWall("Photo & Streaming App Ready! Face highlighting available.");
     // ... (rest of initial photo logic if any, currently commented out)
 
     const cleanup = [

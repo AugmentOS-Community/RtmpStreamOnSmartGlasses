@@ -108,9 +108,9 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
     if (!userId) {
       return res.status(401).json({ success: false, message: 'User not authenticated. Cannot start stream.' });
     }
-    const { rtmpUrl } = req.body; // Optionally allow passing a URL to start with for this user
+    const { rtmpUrl, highlightFaces } = req.body;
     try {
-      await exampleApp.startStreamForUser(userId, rtmpUrl);
+      await exampleApp.startStreamForUser(userId, rtmpUrl, highlightFaces);
       res.json({ success: true, message: 'Stream start requested for user.' });
     } catch (error: any) {
       res.status(500).json({ success: false, message: error.message || 'Failed to start stream for user.' });
