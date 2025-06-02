@@ -155,7 +155,7 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
 
     // Generate the stream key based on user ID (same format as in index.ts)
     const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
-    const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+    const faceRecognitionServerUrl = 'https://stream.okgodoit.com';
 
     try {
       const response = await fetch(`${faceRecognitionServerUrl}/api/faces/${streamKey}`);
@@ -214,7 +214,7 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
 
     // Generate the stream key based on user ID
     const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
-    const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+    const faceRecognitionServerUrl = 'https://stream.okgodoit.com';
 
     try {
       const response = await fetch(`${faceRecognitionServerUrl}/api/faces/${streamKey}/rename`, {

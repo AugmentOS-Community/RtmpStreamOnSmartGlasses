@@ -151,7 +151,7 @@ class ExampleAugmentOSApp extends TpaServer {
       try {
         // Generate a unique stream key for this user
         const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
-        const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+        const faceRecognitionServerUrl = 'https://stream.okgodoit.com';
         
         // Prepare configuration based on stream mode
         const configBody: any = {
@@ -187,7 +187,7 @@ class ExampleAugmentOSApp extends TpaServer {
         }
         
         // Update the URL to stream to the face recognition server
-        urlToUse = `rtmp://146.190.174.202:8080/live/${streamKey}`;
+        urlToUse = `rtmp://stream.okgodoit.com/live/${streamKey}`;
         console.log(`Streaming to face recognition server at: ${urlToUse}`);
         
       } catch (error: any) {
