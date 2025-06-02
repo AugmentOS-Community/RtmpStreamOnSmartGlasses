@@ -21,7 +21,8 @@
         .user-info,
         .rtmp-control,
         .stream-status-container,
-        .detected-faces-section {
+        .detected-faces-section,
+        .stream-player-section {
             margin-bottom: 20px;
         }
         .user-id {
@@ -138,6 +139,50 @@
             color: #666;
             padding: 20px;
         }
+        
+        /* Stream mode selection styles */
+        .stream-mode-selection {
+            margin: 15px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .mode-option {
+            margin: 5px 0;
+        }
+        .mode-option input[type="radio"] {
+            margin-right: 8px;
+        }
+        
+        /* Video player styles */
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #hlsPlayer {
+            width: 100%;
+            height: auto;
+            max-height: 450px;
+        }
+        .video-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+        }
+        .rtmp-url-section {
+            transition: opacity 0.3s ease;
+        }
+        .rtmp-url-section.dimmed {
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body>
@@ -155,25 +200,52 @@
         </div>
 
         <% if (userId) { %>
-            <div class="rtmp-control">
-                <h2>RTMP URL</h2>
-                <label for="rtmpUrlInput">RTMP URL:</label>
-                <input type="text" id="rtmpUrlInput" value="<%= rtmpUrl || '' %>">
-                <button id="updateRtmpUrlButton" class="btn-update">Update URL</button>
-            </div>
-
             <div class="stream-actions">
-                <h2>Stream Actions</h2>
+                <h2>Stream Settings</h2>
+                
+                <div class="stream-mode-selection">
+                    <label><strong>Stream Output Mode:</strong></label>
+                    <div class="mode-option">
+                        <label>
+                            <input type="radio" name="streamMode" value="hls" <%= (!locals.streamMode || streamMode === 'hls') ? 'checked' : '' %>>
+                            Stream to Web View (HLS) - View stream directly in browser with face highlighting
+                        </label>
+                    </div>
+                    <div class="mode-option">
+                        <label>
+                            <input type="radio" name="streamMode" value="rtmp" <%= (locals.streamMode && streamMode === 'rtmp') ? 'checked' : '' %>>
+                            Stream to RTMP URL - Send to external service
+                        </label>
+                    </div>
+                </div>
+                
+                <div id="rtmpUrlSection" class="rtmp-control rtmp-url-section <%= (!locals.streamMode || streamMode === 'hls') ? 'dimmed' : '' %>">
+                    <label for="rtmpUrlInput">RTMP URL (for external streaming):</label>
+                    <input type="text" id="rtmpUrlInput" value="<%= rtmpUrl || '' %>">
+                    <button id="updateRtmpUrlButton" class="btn-update">Update URL</button>
+                </div>
+
                 <div style="margin-bottom: 15px;">
                     <label>
                         <input type="checkbox" id="highlightFacesCheckbox" style="margin-right: 8px;">
-                        Highlight Faces
+                        Highlight Faces (always on for HLS mode)
                     </label>
                 </div>
+                
                 <button id="startStreamButton" class="btn-start">Start Stream</button>
                 <button id="stopStreamButton" class="btn-stop">Stop Stream</button>
             </div>
         <% } %>
+
+        <div id="streamPlayerSection" class="stream-player-section <%= (!locals.hlsUrl) ? 'hidden' : '' %>">
+            <h2>Live Stream</h2>
+            <div class="video-container">
+                <div id="videoLoading" class="video-loading hidden">Loading stream...</div>
+                <video id="hlsPlayer" controls playsinline webkit-playsinline>
+                    Your browser does not support video playback.
+                </video>
+            </div>
+        </div>
 
         <div class="stream-status-container">
             <h2>Current Stream Status</h2>
@@ -193,6 +265,9 @@
 
     </div>
 
+    <!-- Include HLS.js library -->
+    <script src="https://unpkg.com/hls.js@latest"></script>
+    
     <script>
         const rtmpUrlInput = document.getElementById('rtmpUrlInput');
         const updateRtmpUrlButton = document.getElementById('updateRtmpUrlButton');
@@ -206,9 +281,106 @@
         const detectedFacesSection = document.getElementById('detectedFacesSection');
         const facesContainer = document.getElementById('facesContainer');
         const refreshFacesButton = document.getElementById('refreshFacesButton');
+        const streamPlayerSection = document.getElementById('streamPlayerSection');
+        const hlsPlayer = document.getElementById('hlsPlayer');
+        const videoLoading = document.getElementById('videoLoading');
+        const rtmpUrlSection = document.getElementById('rtmpUrlSection');
+        const streamModeRadios = document.querySelectorAll('input[name="streamMode"]');
 
         const currentUserId = '<%= userId %>'; // Will be empty if not authenticated
-        let faceHighlightingEnabled = <%= faceHighlightingEnabled || false %>;
+        let faceHighlightingEnabled = <%= typeof faceHighlightingEnabled !== 'undefined' ? faceHighlightingEnabled : false %>;
+        let currentHlsUrl = '<%= typeof hlsUrl !== 'undefined' && hlsUrl ? hlsUrl : "" %>';
+        let currentStreamMode = '<%= typeof streamMode !== 'undefined' ? streamMode : "hls" %>';
+        let hlsInstance = null;
+
+        // Handle stream mode changes
+        streamModeRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                currentStreamMode = e.target.value;
+                
+                // Update UI based on mode
+                if (currentStreamMode === 'hls') {
+                    rtmpUrlSection.classList.add('dimmed');
+                    highlightFacesCheckbox.checked = true;
+                    highlightFacesCheckbox.disabled = true;
+                } else {
+                    rtmpUrlSection.classList.remove('dimmed');
+                    highlightFacesCheckbox.disabled = false;
+                }
+            });
+        });
+
+        // Initialize checkbox state based on current mode
+        if (currentStreamMode === 'hls') {
+            highlightFacesCheckbox.checked = true;
+            highlightFacesCheckbox.disabled = true;
+        }
+
+        function initializeHlsPlayer(hlsUrl) {
+            if (!hlsUrl) return;
+            
+            currentHlsUrl = hlsUrl;
+            streamPlayerSection.classList.remove('hidden');
+            videoLoading.classList.remove('hidden');
+
+            if (Hls.isSupported()) {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                }
+                hlsInstance = new Hls({
+                    maxBufferLength: 10,
+                    maxMaxBufferLength: 30,
+                    maxLoadingDelay: 2,
+                    liveSyncDuration: 2,
+                    liveMaxLatencyDuration: 5,
+                });
+                
+                hlsInstance.loadSource(hlsUrl);
+                hlsInstance.attachMedia(hlsPlayer);
+                
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+                    videoLoading.classList.add('hidden');
+                    hlsPlayer.play().catch(e => {
+                        console.log('Autoplay prevented:', e);
+                    });
+                });
+                
+                hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS.js error:', data);
+                    if (data.fatal) {
+                        videoLoading.textContent = 'Stream error. Retrying...';
+                        setTimeout(() => {
+                            if (hlsInstance) {
+                                hlsInstance.loadSource(hlsUrl);
+                            }
+                        }, 3000);
+                    }
+                });
+            } else if (hlsPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (Safari/iOS)
+                hlsPlayer.src = hlsUrl;
+                videoLoading.classList.add('hidden');
+                hlsPlayer.addEventListener('loadedmetadata', function() {
+                    hlsPlayer.play().catch(e => {
+                        console.log('Autoplay prevented:', e);
+                    });
+                });
+            } else {
+                console.error('HLS is not supported in this browser');
+                videoLoading.textContent = 'HLS not supported in this browser';
+            }
+        }
+
+        function stopHlsPlayer() {
+            if (hlsInstance) {
+                hlsInstance.destroy();
+                hlsInstance = null;
+            }
+            if (hlsPlayer) {
+                hlsPlayer.src = '';
+            }
+            streamPlayerSection.classList.add('hidden');
+        }
 
         function showMessage(text, isError = false) {
             messageArea.textContent = text;
@@ -231,6 +403,21 @@
                     } else {
                         detectedFacesSection.classList.add('hidden');
                     }
+                }
+
+                // Handle HLS URL updates
+                if (data.hlsUrl && data.hlsUrl !== currentHlsUrl) {
+                    initializeHlsPlayer(data.hlsUrl);
+                } else if (!data.hlsUrl && currentHlsUrl) {
+                    stopHlsPlayer();
+                    currentHlsUrl = '';
+                }
+
+                // Update stream mode if changed
+                if (data.streamMode && data.streamMode !== currentStreamMode) {
+                    currentStreamMode = data.streamMode;
+                    const modeRadio = document.querySelector(`input[name="streamMode"][value="${currentStreamMode}"]`);
+                    if (modeRadio) modeRadio.checked = true;
                 }
             } catch (error) {
                 console.error('Error fetching stream info:', error);
@@ -376,8 +563,16 @@
         if (startStreamButton) {
             startStreamButton.addEventListener('click', async () => {
                 if (!currentUserId) { showMessage('Not authenticated. Cannot start stream.', true); return; }
+                
                 const currentRtmpUrl = rtmpUrlInput ? rtmpUrlInput.value : null;
-                const highlightFaces = highlightFacesCheckbox ? highlightFacesCheckbox.checked : false;
+                let highlightFaces = highlightFacesCheckbox ? highlightFacesCheckbox.checked : false;
+                const streamMode = currentStreamMode;
+                
+                // Force highlight faces for HLS mode
+                if (streamMode === 'hls') {
+                    highlightFaces = true;
+                }
+                
                 showMessage('Requesting to start stream...');
                 try {
                     const response = await fetch('/api/start-stream', {
@@ -385,7 +580,8 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 
                             rtmpUrl: currentRtmpUrl,
-                            highlightFaces: highlightFaces
+                            highlightFaces: highlightFaces,
+                            streamMode: streamMode
                         })
                     });
                     const result = await response.json();
@@ -415,6 +611,7 @@
                     const result = await response.json();
                     if (result.success) {
                         showMessage('Stop stream request sent successfully!');
+                        stopHlsPlayer(); // Stop the player immediately
                     } else {
                         showMessage(result.message || 'Failed to stop stream.', true);
                     }
@@ -449,6 +646,11 @@
         // Update status text on load
         const initialStatus = <%- JSON.stringify(streamStatus || null) %>;
         updateStatusText(initialStatus);
+
+        // Initialize HLS player if URL is already available
+        if (currentHlsUrl) {
+            initializeHlsPlayer(currentHlsUrl);
+        }
 
     </script>
 </body>

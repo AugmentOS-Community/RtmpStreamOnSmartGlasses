@@ -12,6 +12,8 @@ interface UserStreamState {
   streamStatus: RtmpStreamStatus;
   session: TpaSession;
   faceHighlightingEnabled?: boolean;
+  hlsUrl?: string; // Add HLS URL tracking
+  streamMode?: 'rtmp' | 'hls'; // Remove 'both' mode
 }
 
 // Interface for persistent user settings that survive disconnections
@@ -117,18 +119,28 @@ class ExampleAugmentOSApp extends TpaServer {
    * @returns Whether face highlighting is enabled
    */
   public isFaceHighlightingEnabledForUser(userId: string): boolean {
-    return this.activeUserStates.get(userId)?.faceHighlightingEnabled || false;
+    return this.activeUserStates.get(userId)?.faceHighlightingEnabled || true;
   }
 
   public streamStoppedStatus: RtmpStreamStatus = { type: GlassesToCloudMessageType.RTMP_STREAM_STATUS, status: 'stopped', timestamp: new Date() };
 
   // Method to start stream for a user
-  public async startStreamForUser(userId: string, rtmpUrl?: string, highlightFaces?: boolean): Promise<void> {
+  public async startStreamForUser(userId: string, rtmpUrl?: string, highlightFaces?: boolean, streamMode?: 'rtmp' | 'hls'): Promise<void> {
     const userState = this.activeUserStates.get(userId);
     if (!userState) {
       console.error("No active session for user:", userId);
       throw new Error("No active session for user to start stream.");
     }
+    
+    // Default to HLS mode if not specified
+    const mode = streamMode || 'hls';
+    userState.streamMode = mode;
+    
+    // HLS mode requires face highlighting
+    if (mode === 'hls') {
+      highlightFaces = true;
+    }
+    
     let urlToUse = rtmpUrl || userState.rtmpUrl || this.defaultRtmpUrl;
     
     // Update the face highlighting state
@@ -141,15 +153,24 @@ class ExampleAugmentOSApp extends TpaServer {
         const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
         const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
         
+        // Prepare configuration based on stream mode
+        const configBody: any = {
+          detect_every: 5, // Detect faces every 5 frames for performance
+          similarity_threshold: 0.3 // Reasonable threshold for face matching
+        };
+        
+        // Configure output based on mode
+        if (mode === 'hls') {
+          configBody.output_hls = true;
+        } else {
+          configBody.output_rtmp = urlToUse;
+        }
+        
         // Configure the face recognition server
         const configResponse = await fetch(`${faceRecognitionServerUrl}/api/config/${streamKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            output_rtmp: urlToUse, // The face recognition server will output to the user's RTMP URL
-            detect_every: 5, // Detect faces every 3 frames for performance
-            similarity_threshold: 0.3 // Reasonable threshold for face matching
-          })
+          body: JSON.stringify(configBody)
         });
         
         if (!configResponse.ok) {
@@ -159,7 +180,13 @@ class ExampleAugmentOSApp extends TpaServer {
         const configResult = await configResponse.json();
         console.log(`Face recognition configured for user ${userId}:`, configResult);
         
-        // Update the URL to stream to the face recognition server instead
+        // Store HLS URL if available
+        if (configResult.output_url && mode === 'hls') {
+          userState.hlsUrl = configResult.output_url;
+          console.log(`HLS stream will be available at: ${userState.hlsUrl}`);
+        }
+        
+        // Update the URL to stream to the face recognition server
         urlToUse = `rtmp://146.190.174.202:8080/live/${streamKey}`;
         console.log(`Streaming to face recognition server at: ${urlToUse}`);
         
@@ -167,12 +194,22 @@ class ExampleAugmentOSApp extends TpaServer {
         console.error(`Failed to configure face recognition for user ${userId}:`, error);
         throw new Error(`Failed to configure face recognition: ${error.message}`);
       }
+    } else {
+      // No face highlighting - only valid for RTMP mode
+      if (mode === 'hls') {
+        console.error('HLS mode requires face highlighting');
+        throw new Error('HLS mode requires face highlighting to be enabled');
+      }
     }
     
     userState.rtmpUrl = urlToUse; // Update the user's state with the URL being used
 
+    const streamModeText = mode === 'hls' ? 
+      "Starting stream with face highlighting (HLS)..." : 
+      (highlightFaces ? "Starting stream with face highlighting (RTMP)..." : "Starting RTMP stream...");
+      
     console.log(`Attempting to start stream for user ${userId} to URL ${urlToUse}`);
-    userState.session.layouts.showTextWall(highlightFaces ? "Starting RTMP stream with face highlighting..." : "Starting RTMP stream via web...");
+    userState.session.layouts.showTextWall(streamModeText);
     try {
       await userState.session.streaming.requestStream({
         rtmpUrl: urlToUse,
@@ -188,6 +225,24 @@ class ExampleAugmentOSApp extends TpaServer {
       userState.streamStatus = { ...this.getInitialStreamStatus(), status: 'error', errorDetails: error.message, timestamp: new Date()};
       throw error;
     }
+  }
+
+  /**
+   * Gets the HLS URL for a specific user if available
+   * @param userId - The user ID to get the HLS URL for
+   * @returns The user's HLS URL or undefined if not available
+   */
+  public getHlsUrlForUser(userId: string): string | undefined {
+    return this.activeUserStates.get(userId)?.hlsUrl;
+  }
+
+  /**
+   * Gets the stream mode for a specific user
+   * @param userId - The user ID to get the stream mode for
+   * @returns The user's stream mode or 'hls' as default
+   */
+  public getStreamModeForUser(userId: string): 'rtmp' | 'hls' {
+    return this.activeUserStates.get(userId)?.streamMode || 'hls';
   }
 
   // Method to stop stream for a user

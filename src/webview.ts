@@ -28,11 +28,15 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
     let rtmpUrlToShow: string | undefined;
     let streamStatusToShow;
     let faceHighlightingEnabled = false;
+    let hlsUrl: string | undefined;
+    let streamMode: 'rtmp' | 'hls' = 'hls'; // Default to HLS
 
     if (userId) {
       rtmpUrlToShow = exampleApp.getRtmpUrlForUser(userId);
       streamStatusToShow = exampleApp.getStreamStatusForUser(userId);
       faceHighlightingEnabled = exampleApp.isFaceHighlightingEnabledForUser(userId);
+      hlsUrl = exampleApp.getHlsUrlForUser(userId);
+      streamMode = exampleApp.getStreamModeForUser(userId);
     } else {
       rtmpUrlToShow = exampleApp.getDefaultRtmpUrl();
       streamStatusToShow = exampleApp.streamStoppedStatus; // Or a generic stopped status
@@ -42,7 +46,9 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
       userId: userId,
       rtmpUrl: rtmpUrlToShow,
       streamStatus: streamStatusToShow,
-      faceHighlightingEnabled: faceHighlightingEnabled
+      faceHighlightingEnabled: faceHighlightingEnabled,
+      hlsUrl: hlsUrl,
+      streamMode: streamMode
     });
   });
 
@@ -55,6 +61,8 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
         streamStatus: exampleApp.streamStoppedStatus,
         userId: null,
         faceHighlightingEnabled: false,
+        hlsUrl: null,
+        streamMode: 'hls',
         message: "User not authenticated. Showing default info."
       });
     }
@@ -62,7 +70,9 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
       rtmpUrl: exampleApp.getRtmpUrlForUser(userId),
       streamStatus: exampleApp.getStreamStatusForUser(userId),
       userId: userId,
-      faceHighlightingEnabled: exampleApp.isFaceHighlightingEnabledForUser(userId)
+      faceHighlightingEnabled: exampleApp.isFaceHighlightingEnabledForUser(userId),
+      hlsUrl: exampleApp.getHlsUrlForUser(userId),
+      streamMode: exampleApp.getStreamModeForUser(userId)
     });
   });
 
@@ -113,9 +123,9 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
     if (!userId) {
       return res.status(401).json({ success: false, message: 'User not authenticated. Cannot start stream.' });
     }
-    const { rtmpUrl, highlightFaces } = req.body;
+    const { rtmpUrl, highlightFaces, streamMode } = req.body;
     try {
-      await exampleApp.startStreamForUser(userId, rtmpUrl, highlightFaces);
+      await exampleApp.startStreamForUser(userId, rtmpUrl, highlightFaces, streamMode);
       res.json({ success: true, message: 'Stream start requested for user.' });
     } catch (error: any) {
       res.status(500).json({ success: false, message: error.message || 'Failed to start stream for user.' });
