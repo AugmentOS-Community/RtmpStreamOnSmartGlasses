@@ -11,6 +11,7 @@ interface UserStreamState {
   rtmpUrl: string;
   streamStatus: RtmpStreamStatus;
   session: TpaSession;
+  faceHighlightingEnabled?: boolean;
 }
 
 // Interface for persistent user settings that survive disconnections
@@ -110,6 +111,15 @@ class ExampleAugmentOSApp extends TpaServer {
     return this.activeUserStates.get(userId)?.streamStatus || this.getInitialStreamStatus();
   }
 
+  /**
+   * Checks if face highlighting is enabled for a specific user
+   * @param userId - The user ID to check
+   * @returns Whether face highlighting is enabled
+   */
+  public isFaceHighlightingEnabledForUser(userId: string): boolean {
+    return this.activeUserStates.get(userId)?.faceHighlightingEnabled || false;
+  }
+
   public streamStoppedStatus: RtmpStreamStatus = { type: GlassesToCloudMessageType.RTMP_STREAM_STATUS, status: 'stopped', timestamp: new Date() };
 
   // Method to start stream for a user
@@ -120,6 +130,9 @@ class ExampleAugmentOSApp extends TpaServer {
       throw new Error("No active session for user to start stream.");
     }
     let urlToUse = rtmpUrl || userState.rtmpUrl || this.defaultRtmpUrl;
+    
+    // Update the face highlighting state
+    userState.faceHighlightingEnabled = highlightFaces;
     
     // If face highlighting is enabled, configure the face recognition server
     if (highlightFaces) {

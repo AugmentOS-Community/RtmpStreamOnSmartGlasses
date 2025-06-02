@@ -27,10 +27,12 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
     const userId = req.authUserId;
     let rtmpUrlToShow: string | undefined;
     let streamStatusToShow;
+    let faceHighlightingEnabled = false;
 
     if (userId) {
       rtmpUrlToShow = exampleApp.getRtmpUrlForUser(userId);
       streamStatusToShow = exampleApp.getStreamStatusForUser(userId);
+      faceHighlightingEnabled = exampleApp.isFaceHighlightingEnabledForUser(userId);
     } else {
       rtmpUrlToShow = exampleApp.getDefaultRtmpUrl();
       streamStatusToShow = exampleApp.streamStoppedStatus; // Or a generic stopped status
@@ -39,7 +41,8 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
     res.render('webview', {
       userId: userId,
       rtmpUrl: rtmpUrlToShow,
-      streamStatus: streamStatusToShow
+      streamStatus: streamStatusToShow,
+      faceHighlightingEnabled: faceHighlightingEnabled
     });
   });
 
@@ -51,13 +54,15 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
         rtmpUrl: exampleApp.getDefaultRtmpUrl(),
         streamStatus: exampleApp.streamStoppedStatus,
         userId: null,
+        faceHighlightingEnabled: false,
         message: "User not authenticated. Showing default info."
       });
     }
     res.json({
       rtmpUrl: exampleApp.getRtmpUrlForUser(userId),
       streamStatus: exampleApp.getStreamStatusForUser(userId),
-      userId: userId
+      userId: userId,
+      faceHighlightingEnabled: exampleApp.isFaceHighlightingEnabledForUser(userId)
     });
   });
 
@@ -128,6 +133,102 @@ export function setupExpressRoutes(serverInstance: TpaServer): void {
       res.json({ success: true, message: 'Stream stop requested for user.' });
     } catch (error: any) {
       res.status(500).json({ success: false, message: error.message || 'Failed to stop stream for user.' });
+    }
+  });
+
+  // API endpoint to get detected faces for the authenticated user's stream
+  app.get('/api/faces', async (req: AuthenticatedRequest, res: any) => {
+    const userId = req.authUserId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'User not authenticated.' });
+    }
+
+    // Generate the stream key based on user ID (same format as in index.ts)
+    const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
+    const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+
+    try {
+      const response = await fetch(`${faceRecognitionServerUrl}/api/faces/${streamKey}`);
+      
+      if (response.status === 404) {
+        return res.json({
+          success: true,
+          stream_key: streamKey,
+          count: 0,
+          faces: [],
+          message: 'No faces detected yet'
+        });
+      }
+
+      if (!response.ok) {
+        throw new Error(`Face server responded with status: ${response.status}`);
+      }
+
+      const facesData = await response.json();
+      res.json({
+        success: true,
+        ...facesData
+      });
+    } catch (error: any) {
+      console.error(`Error fetching faces for user ${userId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to fetch detected faces.'
+      });
+    }
+  });
+
+  // API endpoint to rename a face label for the authenticated user's stream
+  app.put('/api/faces/rename', async (req: AuthenticatedRequest, res: any) => {
+    const userId = req.authUserId;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'User not authenticated.' });
+    }
+
+    const { old_label, new_label } = req.body;
+
+    // Validate request body
+    if (!old_label || !new_label) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both old_label and new_label are required.'
+      });
+    }
+
+    if (typeof old_label !== 'string' || typeof new_label !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Labels must be strings.'
+      });
+    }
+
+    // Generate the stream key based on user ID
+    const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
+    const faceRecognitionServerUrl = 'http://146.190.174.202:8080';
+
+    try {
+      const response = await fetch(`${faceRecognitionServerUrl}/api/faces/${streamKey}/rename`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_label, new_label })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Face server responded with status: ${response.status}`);
+      }
+
+      const renameResult = await response.json();
+      res.json({
+        success: true,
+        ...renameResult
+      });
+    } catch (error: any) {
+      console.error(`Error renaming face for user ${userId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to rename face label.'
+      });
     }
   });
 }
