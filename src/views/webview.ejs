@@ -252,9 +252,11 @@
                     <button id="updateSimulationVideoButton" class="btn-update">Load Demo Video</button>
                     <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
                         <strong>Sample videos:</strong><br>
-                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')">Big Buck Bunny</a> |
-                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4')">Elephants Dream</a> |
-                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4')">Sintel</a>
+                        <a href="#" onclick="loadSampleVideo('https://stream.okgodoit.com/hls/sim/sfo1.mp4')">SFO 1</a> |
+                        <a href="#" onclick="loadSampleVideo('https://stream.okgodoit.com/hls/sim/sfo2.mp4')">SFO 2</a> |
+                        <a href="#" onclick="loadSampleVideo('https://stream.okgodoit.com/hls/sim/sfo3.mp4')">SFO 3</a> |
+                        <a href="#" onclick="loadSampleVideo('https://stream.okgodoit.com/hls/sim/sfo4.mp4')">SFO 4</a> |
+                        <a href="#" onclick="loadSampleVideo('https://stream.okgodoit.com/hls/sim/sfo5.mp4')">SFO 5</a> |
                     </div>
                 </div>
 
@@ -1031,7 +1033,7 @@
          */
         function loadSampleVideo(videoUrl) {
             simulationVideoInput.value = videoUrl;
-            showMessage(`Demo video loaded: ${videoUrl}`);
+            initializeSimulationPlayer(videoUrl);
         }
 
         /**
