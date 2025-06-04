@@ -6,19 +6,25 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 const PACKAGE_NAME = process.env.PACKAGE_NAME;
 const AUGMENTOS_API_KEY = process.env.AUGMENTOS_API_KEY;
 
-// Interface for per-session stream state
+/**
+ * Represents the user-specific stream state for each active session
+ */
 interface UserStreamState {
   rtmpUrl: string;
   streamStatus: RtmpStreamStatus;
   session: TpaSession;
   faceHighlightingEnabled?: boolean;
   hlsUrl?: string; // Add HLS URL tracking
-  streamMode?: 'rtmp' | 'hls'; // Remove 'both' mode
+  streamMode?: 'rtmp' | 'hls' | 'simulation'; // Add simulation mode
 }
 
-// Interface for persistent user settings that survive disconnections
+/**
+ * Represents persistent user settings that survive session disconnections
+ */
 interface UserPersistentSettings {
   rtmpUrl: string;
+  streamMode?: 'rtmp' | 'hls' | 'simulation'; // Add simulation mode
+  faceHighlightingEnabled?: boolean;
 }
 
 class ExampleAugmentOSApp extends TpaServer {
@@ -65,8 +71,14 @@ class ExampleAugmentOSApp extends TpaServer {
       console.warn(`Warning: RTMP URL for user ${userId} does not start with rtmp:// or rtmps://`);
     }
 
-    // Save to persistent storage first
-    this.persistentUserSettings.set(userId, { rtmpUrl: newUrl });
+    // Get existing persistent settings or create new ones
+    const existingSettings = this.persistentUserSettings.get(userId) || { rtmpUrl: this.defaultRtmpUrl };
+
+    // Save to persistent storage with updated RTMP URL
+    this.persistentUserSettings.set(userId, {
+      ...existingSettings,
+      rtmpUrl: newUrl
+    });
 
     const userState = this.activeUserStates.get(userId);
     if (userState) {
@@ -79,6 +91,35 @@ class ExampleAugmentOSApp extends TpaServer {
     } else {
       console.log(`RTMP URL saved for user ${userId} (no active session): ${newUrl}`);
     }
+  }
+
+  /**
+   * Updates persistent settings for a user
+   * @param userId - The user ID to update settings for
+   * @param settings - Partial settings to update
+   */
+  public updatePersistentSettingsForUser(userId: string, settings: Partial<UserPersistentSettings>): void {
+    const existingSettings = this.persistentUserSettings.get(userId) || { rtmpUrl: this.defaultRtmpUrl };
+
+    // Merge new settings with existing ones
+    const updatedSettings = { ...existingSettings, ...settings };
+    this.persistentUserSettings.set(userId, updatedSettings);
+
+    // Update active session state if user is connected
+    const userState = this.activeUserStates.get(userId);
+    if (userState) {
+      if (settings.streamMode !== undefined) {
+        userState.streamMode = settings.streamMode;
+      }
+      if (settings.faceHighlightingEnabled !== undefined) {
+        userState.faceHighlightingEnabled = settings.faceHighlightingEnabled;
+      }
+      if (settings.rtmpUrl !== undefined) {
+        userState.rtmpUrl = settings.rtmpUrl;
+      }
+    }
+
+    console.log(`Persistent settings updated for user ${userId}:`, settings);
   }
 
   /**
@@ -119,96 +160,174 @@ class ExampleAugmentOSApp extends TpaServer {
    * @returns Whether face highlighting is enabled
    */
   public isFaceHighlightingEnabledForUser(userId: string): boolean {
-    return this.activeUserStates.get(userId)?.faceHighlightingEnabled || true;
+    // Check persistent storage first, then active state, then default to true
+    const persistentSettings = this.persistentUserSettings.get(userId);
+    if (persistentSettings && persistentSettings.faceHighlightingEnabled !== undefined) {
+      return persistentSettings.faceHighlightingEnabled;
+    }
+
+    return this.activeUserStates.get(userId)?.faceHighlightingEnabled ?? true;
   }
 
   public streamStoppedStatus: RtmpStreamStatus = { type: GlassesToCloudMessageType.RTMP_STREAM_STATUS, status: 'stopped', timestamp: new Date() };
 
+  /**
+   * Debug method to check active sessions
+   * @param userId - The user ID to check for
+   */
+  public debugActiveStates(userId?: string): void {
+    console.log(`🔍 Active session debug:`);
+    console.log(`Total active sessions: ${this.activeUserStates.size}`);
+    console.log(`Active user IDs: [${Array.from(this.activeUserStates.keys()).join(', ')}]`);
+
+    if (userId) {
+      const hasActiveState = this.activeUserStates.has(userId);
+      console.log(`User "${userId}" has active session: ${hasActiveState}`);
+
+      if (hasActiveState) {
+        const userState = this.activeUserStates.get(userId);
+        console.log(`User state:`, {
+          rtmpUrl: userState?.rtmpUrl,
+          streamMode: userState?.streamMode,
+          faceHighlightingEnabled: userState?.faceHighlightingEnabled,
+          streamStatus: userState?.streamStatus?.status
+        });
+      }
+    }
+
+    console.log(`Persistent settings for all users:`,
+      Object.fromEntries(this.persistentUserSettings.entries())
+    );
+  }
+
   // Method to start stream for a user
-  public async startStreamForUser(userId: string, rtmpUrl?: string, highlightFaces?: boolean, streamMode?: 'rtmp' | 'hls'): Promise<void> {
+  public async startStreamForUser(userId: string, rtmpUrl?: string, highlightFaces?: boolean, streamMode?: 'rtmp' | 'hls' | 'simulation'): Promise<void> {
+    console.log(`🔍 [${userId}] Attempting to start stream - checking active session...`);
+    this.debugActiveStates(userId);
+
     const userState = this.activeUserStates.get(userId);
     if (!userState) {
-      console.error("No active session for user:", userId);
-      throw new Error("No active session for user to start stream.");
+      console.error(`❌ [${userId}] No active session for user - glasses may not be connected`);
+      throw new Error("No active session for user to start stream. Please ensure glasses are connected and paired.");
     }
-    
+
     // Default to HLS mode if not specified
     const mode = streamMode || 'hls';
     userState.streamMode = mode;
-    
+
+    // Handle simulation mode - no actual streaming needed
+    if (mode === 'simulation') {
+      console.log(`🎥 [${userId}] Demo mode - connecting to sample content source`);
+
+      // Update the face highlighting state for simulation
+      userState.faceHighlightingEnabled = highlightFaces;
+
+      // Save preferences to persistent storage
+      this.updatePersistentSettingsForUser(userId, {
+        streamMode: mode,
+        faceHighlightingEnabled: highlightFaces
+      });
+
+      console.log(`✅ [${userId}] Demo content source connected with settings:`, {
+        streamMode: mode,
+        faceHighlightingEnabled: highlightFaces
+      });
+
+      return; // Skip the rest of the streaming setup
+    }
+
     // HLS mode requires face highlighting
     if (mode === 'hls') {
       highlightFaces = true;
     }
-    
+
     let urlToUse = rtmpUrl || userState.rtmpUrl || this.defaultRtmpUrl;
-    
+
     // Update the face highlighting state
     userState.faceHighlightingEnabled = highlightFaces;
-    
+
+    // Save preferences to persistent storage
+    this.updatePersistentSettingsForUser(userId, {
+      streamMode: mode,
+      faceHighlightingEnabled: highlightFaces
+    });
+
+    // Log all current settings before starting
+    console.log(`🚀 [${userId}] Starting stream with settings:`, {
+      streamMode: mode,
+      rtmpUrl: urlToUse,
+      originalRtmpUrl: rtmpUrl,
+      userStateRtmpUrl: userState.rtmpUrl,
+      highlightFaces: highlightFaces,
+      faceHighlightingEnabled: userState.faceHighlightingEnabled,
+      hlsUrl: userState.hlsUrl,
+      persistentSettings: this.persistentUserSettings.get(userId)
+    });
+
     // If face highlighting is enabled, configure the face recognition server
     if (highlightFaces) {
       try {
         // Generate a unique stream key for this user
         const streamKey = `user_${userId.replace(/[@]/g, '_')}`;
         const faceRecognitionServerUrl = 'https://stream.okgodoit.com';
-        
+
         // Prepare configuration based on stream mode
         const configBody: any = {
           detect_every: 5, // Detect faces every 5 frames for performance
           similarity_threshold: 0.3 // Reasonable threshold for face matching
         };
-        
+
         // Configure output based on mode
         if (mode === 'hls') {
           configBody.output_hls = true;
         } else {
           configBody.output_rtmp = urlToUse;
         }
-        
+
         // Configure the face recognition server
         const configResponse = await fetch(`${faceRecognitionServerUrl}/api/config/${streamKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(configBody)
         });
-        
+
         if (!configResponse.ok) {
           throw new Error(`Failed to configure face recognition: ${configResponse.statusText}`);
         }
-        
+
         const configResult = await configResponse.json();
-        console.log(`Face recognition configured for user ${userId}:`, configResult);
-        
+        console.log(`✅ [${userId}] Face recognition configured for stream key ${streamKey}:`, configResult);
+
         // Store HLS URL if available
         if (configResult.output_url && mode === 'hls') {
           userState.hlsUrl = configResult.output_url;
-          console.log(`HLS stream will be available at: ${userState.hlsUrl}`);
+          console.log(`📺 [${userId}] HLS stream will be available at: ${userState.hlsUrl}`);
         }
-        
+
         // Update the URL to stream to the face recognition server
         urlToUse = `rtmp://stream.okgodoit.com/live/${streamKey}`;
-        console.log(`Streaming to face recognition server at: ${urlToUse}`);
-        
+        console.log(`🎯 [${userId}] Streaming to face recognition server at: ${urlToUse}`);
+
       } catch (error: any) {
-        console.error(`Failed to configure face recognition for user ${userId}:`, error);
+        console.error(`❌ [${userId}] Failed to configure face recognition:`, error);
         throw new Error(`Failed to configure face recognition: ${error.message}`);
       }
     } else {
       // No face highlighting - only valid for RTMP mode
       if (mode === 'hls') {
-        console.error('HLS mode requires face highlighting');
+        console.error(`❌ [${userId}] HLS mode requires face highlighting`);
         throw new Error('HLS mode requires face highlighting to be enabled');
       }
+      console.log(`📡 [${userId}] Direct RTMP streaming (no face highlighting) to: ${urlToUse}`);
     }
-    
+
     userState.rtmpUrl = urlToUse; // Update the user's state with the URL being used
 
-    const streamModeText = mode === 'hls' ? 
-      "Starting stream with face highlighting (HLS)..." : 
+    const streamModeText = mode === 'hls' ?
+      "Starting stream with face highlighting (HLS)..." :
       (highlightFaces ? "Starting stream with face highlighting (RTMP)..." : "Starting RTMP stream...");
-      
-    console.log(`Attempting to start stream for user ${userId} to URL ${urlToUse}`);
+
+    console.log(`🎬 [${userId}] Attempting to start stream to URL ${urlToUse}`);
     userState.session.layouts.showTextWall(streamModeText);
     try {
       await userState.session.streaming.requestStream({
@@ -216,10 +335,10 @@ class ExampleAugmentOSApp extends TpaServer {
         video: { width: 1280, height: 720, bitrate: 2000000, frameRate: 30 },
         audio: { bitrate: 128000, sampleRate: 44100, echoCancellation: true, noiseSuppression: true }
       });
-      console.log("RTMP stream requested successfully via web for user:", userId);
+      console.log(`✅ [${userId}] RTMP stream requested successfully via web`);
       // Status will be updated by onStatus handler
     } catch (error: any) {
-      console.error(`Failed to start stream for user ${userId}:`, error);
+      console.error(`❌ [${userId}] Failed to start stream:`, error);
       userState.session.layouts.showTextWall(`Failed to start stream: ${error.message}`);
       // Update status to reflect error if possible, or rely on onStatus
       userState.streamStatus = { ...this.getInitialStreamStatus(), status: 'error', errorDetails: error.message, timestamp: new Date()};
@@ -241,25 +360,45 @@ class ExampleAugmentOSApp extends TpaServer {
    * @param userId - The user ID to get the stream mode for
    * @returns The user's stream mode or 'hls' as default
    */
-  public getStreamModeForUser(userId: string): 'rtmp' | 'hls' {
+  public getStreamModeForUser(userId: string): 'rtmp' | 'hls' | 'simulation' {
+    // Check persistent storage first, then active state, then default to 'hls'
+    const persistentSettings = this.persistentUserSettings.get(userId);
+    if (persistentSettings && persistentSettings.streamMode) {
+      return persistentSettings.streamMode;
+    }
+
     return this.activeUserStates.get(userId)?.streamMode || 'hls';
   }
 
   // Method to stop stream for a user
   public async stopStreamForUser(userId: string): Promise<void> {
+    console.log(`🔍 [${userId}] Attempting to stop stream - checking active session...`);
+    this.debugActiveStates(userId);
+
     const userState = this.activeUserStates.get(userId);
     if (!userState) {
-      console.error("No active session for user:", userId);
-      throw new Error("No active session for user to stop stream.");
+      console.error(`❌ [${userId}] No active session for user - glasses may not be connected`);
+      throw new Error("No active session for user to stop stream. Please ensure glasses are connected and paired.");
     }
+
+    // Log current settings when stopping
+    console.log(`🛑 [${userId}] Stopping stream with current settings:`, {
+      streamMode: userState.streamMode,
+      rtmpUrl: userState.rtmpUrl,
+      faceHighlightingEnabled: userState.faceHighlightingEnabled,
+      hlsUrl: userState.hlsUrl,
+      currentStatus: userState.streamStatus?.status,
+      persistentSettings: this.persistentUserSettings.get(userId)
+    });
+
     console.log(`Attempting to stop stream for user ${userId}`);
     userState.session.layouts.showTextWall("Stopping RTMP stream via web...");
     try {
       await userState.session.streaming.stopStream();
-      console.log("Stream stop requested successfully via web for user:", userId);
+      console.log(`✅ [${userId}] Stream stop requested successfully via web`);
       // Status will be updated by onStatus handler
     } catch (error: any) {
-      console.error(`Failed to stop stream for user ${userId}:`, error);
+      console.error(`❌ [${userId}] Failed to stop stream:`, error);
       userState.session.layouts.showTextWall(`Failed to stop stream: ${error.message}`);
       userState.streamStatus = { ...this.getInitialStreamStatus(), status: 'error', errorDetails: error.message, timestamp: new Date()};
       throw error;
@@ -267,21 +406,32 @@ class ExampleAugmentOSApp extends TpaServer {
   }
 
   protected async onSession(session: TpaSession, sessionId: string, userId: string): Promise<void> {
-    console.log(`New session started: ${sessionId} for user ${userId}`);
+    console.log(`🔌 [${userId}] New session started: ${sessionId}`);
+    this.debugActiveStates(); // Show current state before adding new session
 
-    // Get the user's persistent RTMP URL or use default
+    // Get the user's persistent settings or use defaults
     const persistentSettings = this.persistentUserSettings.get(userId);
     const userRtmpUrl = persistentSettings?.rtmpUrl || this.defaultRtmpUrl;
+    const userStreamMode = persistentSettings?.streamMode || 'hls';
+    const userFaceHighlighting = persistentSettings?.faceHighlightingEnabled ?? true;
 
-    // Initialize state for this user with their persistent RTMP URL
+    // Initialize state for this user with their persistent settings
     const userState: UserStreamState = {
       rtmpUrl: userRtmpUrl,
       streamStatus: this.getInitialStreamStatus(),
       session: session,
+      streamMode: userStreamMode,
+      faceHighlightingEnabled: userFaceHighlighting,
     };
     this.activeUserStates.set(userId, userState);
 
-    console.log(`User ${userId} restored with RTMP URL: ${userRtmpUrl}`);
+    console.log(`✅ [${userId}] Session state initialized with settings:`, {
+      rtmpUrl: userRtmpUrl,
+      streamMode: userStreamMode,
+      faceHighlightingEnabled: userFaceHighlighting
+    });
+    this.debugActiveStates(); // Show state after adding session
+
     session.layouts.showTextWall("Photo & Streaming App Ready! Face highlighting available.");
     // ... (rest of initial photo logic if any, currently commented out)
 
@@ -371,11 +521,12 @@ class ExampleAugmentOSApp extends TpaServer {
       }),
       session.events.onDisconnected((data: string | { message: string; code: number; reason: string; wasClean: boolean; permanent?: boolean }) => {
         const reason = typeof data === 'string' ? data : data.reason;
-        console.log(`Session ${sessionId} for user ${userId} disconnected. Reason: ${reason}`);
+        console.log(`🔌 [${userId}] Session ${sessionId} disconnected. Reason: ${reason}`);
 
         // Only remove the active session state, preserve persistent settings
         this.activeUserStates.delete(userId);
-        console.log(`Active session for ${userId} removed. Active sessions: ${this.activeUserStates.size}. Persistent settings preserved.`);
+        console.log(`🗑️ [${userId}] Active session removed. Active sessions remaining: ${this.activeUserStates.size}. Persistent settings preserved.`);
+        this.debugActiveStates(); // Show state after removal
       })
     ];
 

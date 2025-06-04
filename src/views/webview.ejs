@@ -86,7 +86,7 @@
         .hidden { display: none; }
         .error-message { color: red; margin-top: 10px; }
         .success-message { color: green; margin-top: 10px; }
-        
+
         /* Face detection styles */
         .faces-container {
             display: grid;
@@ -121,6 +121,16 @@
             margin-bottom: 5px;
             border: 1px solid #ccc;
             border-radius: 4px;
+            transition: border-color 0.2s ease;
+        }
+        .rename-input:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
+        }
+        .rename-input:disabled {
+            background-color: #f8f9fa;
+            cursor: not-allowed;
         }
         .rename-button {
             padding: 5px 10px;
@@ -130,16 +140,21 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 0.9em;
+            transition: background-color 0.2s ease;
         }
-        .rename-button:hover {
+        .rename-button:hover:not(:disabled) {
             background-color: #138496;
+        }
+        .rename-button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
         }
         .no-faces-message {
             text-align: center;
             color: #666;
             padding: 20px;
         }
-        
+
         /* Stream mode selection styles */
         .stream-mode-selection {
             margin: 15px 0;
@@ -153,7 +168,7 @@
         .mode-option input[type="radio"] {
             margin-right: 8px;
         }
-        
+
         /* Video player styles */
         .video-container {
             position: relative;
@@ -200,9 +215,9 @@
         </div>
 
         <% if (userId) { %>
-            <div class="stream-actions">
+            <div class="stream-actions" id="streamActions">
                 <h2>Stream Settings</h2>
-                
+
                 <div class="stream-mode-selection">
                     <label><strong>Stream Output Mode:</strong></label>
                     <div class="mode-option">
@@ -217,12 +232,30 @@
                             Stream to RTMP URL - Send to external service
                         </label>
                     </div>
+                    <div class="mode-option">
+                        <label>
+                            <input type="radio" name="streamMode" value="simulation" <%= (locals.streamMode && streamMode === 'simulation') ? 'checked' : '' %>>
+                            Demo Mode - Test with sample video content
+                        </label>
+                    </div>
                 </div>
-                
+
                 <div id="rtmpUrlSection" class="rtmp-control rtmp-url-section <%= (!locals.streamMode || streamMode === 'hls') ? 'dimmed' : '' %>">
                     <label for="rtmpUrlInput">RTMP URL (for external streaming):</label>
                     <input type="text" id="rtmpUrlInput" value="<%= rtmpUrl || '' %>">
                     <button id="updateRtmpUrlButton" class="btn-update">Update URL</button>
+                </div>
+
+                <div id="simulationUrlSection" class="simulation-control rtmp-url-section <%= (!locals.streamMode || streamMode !== 'simulation') ? 'dimmed' : '' %>">
+                    <label for="simulationVideoInput">Demo Video URL:</label>
+                    <input type="text" id="simulationVideoInput" placeholder="https://example.com/video.mp4" value="">
+                    <button id="updateSimulationVideoButton" class="btn-update">Load Demo Video</button>
+                    <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                        <strong>Sample videos:</strong><br>
+                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')">Big Buck Bunny</a> |
+                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4')">Elephants Dream</a> |
+                        <a href="#" onclick="loadSampleVideo('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4')">Sintel</a>
+                    </div>
                 </div>
 
                 <div style="margin-bottom: 15px;">
@@ -231,7 +264,7 @@
                         Highlight Faces (always on for HLS mode)
                     </label>
                 </div>
-                
+
                 <button id="startStreamButton" class="btn-start">Start Stream</button>
                 <button id="stopStreamButton" class="btn-stop">Stop Stream</button>
             </div>
@@ -241,7 +274,7 @@
             <h2>Live Stream</h2>
             <div class="video-container">
                 <div id="videoLoading" class="video-loading hidden">Loading stream...</div>
-                <video id="hlsPlayer" controls playsinline webkit-playsinline>
+                <video id="hlsPlayer" controls playsinline webkit-playsinline muted preload="metadata">
                     Your browser does not support video playback.
                 </video>
             </div>
@@ -267,7 +300,7 @@
 
     <!-- Include HLS.js library -->
     <script src="https://unpkg.com/hls.js@latest"></script>
-    
+
     <script>
         const rtmpUrlInput = document.getElementById('rtmpUrlInput');
         const updateRtmpUrlButton = document.getElementById('updateRtmpUrlButton');
@@ -285,41 +318,121 @@
         const hlsPlayer = document.getElementById('hlsPlayer');
         const videoLoading = document.getElementById('videoLoading');
         const rtmpUrlSection = document.getElementById('rtmpUrlSection');
+        const simulationUrlSection = document.getElementById('simulationUrlSection');
+        const simulationVideoInput = document.getElementById('simulationVideoInput');
+        const updateSimulationVideoButton = document.getElementById('updateSimulationVideoButton');
         const streamModeRadios = document.querySelectorAll('input[name="streamMode"]');
 
         const currentUserId = '<%= userId %>'; // Will be empty if not authenticated
-        let faceHighlightingEnabled = <%= typeof faceHighlightingEnabled !== 'undefined' ? faceHighlightingEnabled : false %>;
-        let currentHlsUrl = '<%= typeof hlsUrl !== 'undefined' && hlsUrl ? hlsUrl : "" %>';
-        let currentStreamMode = '<%= typeof streamMode !== 'undefined' ? streamMode : "hls" %>';
+        let faceHighlightingEnabled = <%- JSON.stringify(faceHighlightingEnabled || false) %>;
+        let currentHlsUrl = '<%= hlsUrl || "" %>';
+        let currentStreamMode = '<%= streamMode || "hls" %>';
         let hlsInstance = null;
+        let simulationVideoUrl = '';
+        let isSimulationActive = false;
+        let simulationStartTime = null;
+
+        // Track editing state to prevent auto-refresh during face renaming
+        let isEditingFaceName = false;
+        let faceRefreshInterval = null;
 
         // Handle stream mode changes
         streamModeRadios.forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                currentStreamMode = e.target.value;
-                
+            radio.addEventListener('change', async (e) => {
+                const newStreamMode = e.target.value;
+                currentStreamMode = newStreamMode;
+
                 // Update UI based on mode
                 if (currentStreamMode === 'hls') {
                     rtmpUrlSection.classList.add('dimmed');
+                    simulationUrlSection.classList.add('dimmed');
                     highlightFacesCheckbox.checked = true;
                     highlightFacesCheckbox.disabled = true;
-                } else {
+                } else if (currentStreamMode === 'rtmp') {
                     rtmpUrlSection.classList.remove('dimmed');
+                    simulationUrlSection.classList.add('dimmed');
+                    highlightFacesCheckbox.disabled = false;
+                } else if (currentStreamMode === 'simulation') {
+                    rtmpUrlSection.classList.add('dimmed');
+                    simulationUrlSection.classList.remove('dimmed');
                     highlightFacesCheckbox.disabled = false;
                 }
+
+                // Save the preference
+                await saveStreamPreferences({ streamMode: newStreamMode });
             });
         });
 
-        // Initialize checkbox state based on current mode
-        if (currentStreamMode === 'hls') {
-            highlightFacesCheckbox.checked = true;
-            highlightFacesCheckbox.disabled = true;
+        // Handle face highlighting checkbox changes
+        if (highlightFacesCheckbox) {
+            highlightFacesCheckbox.addEventListener('change', async (e) => {
+                const isEnabled = e.target.checked;
+
+                // Don't allow disabling face highlighting in HLS mode
+                if (currentStreamMode === 'hls' && !isEnabled) {
+                    e.target.checked = true;
+                    showMessage('Face highlighting cannot be disabled in HLS mode', true);
+                    return;
+                }
+
+                // Save the preference
+                await saveStreamPreferences({ faceHighlightingEnabled: isEnabled });
+            });
+        }
+
+        /**
+         * Save stream preferences to the server
+         * @param {Object} preferences - The preferences to save
+         */
+        async function saveStreamPreferences(preferences) {
+            if (!currentUserId) return;
+
+            console.log('💾 Saving stream preferences:', preferences);
+
+            try {
+                const response = await fetch('/api/stream-preferences', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(preferences)
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    console.log('✅ Stream preferences saved successfully:', result.settings);
+                } else {
+                    console.error('❌ Failed to save preferences:', result.message);
+                }
+            } catch (error) {
+                console.error('❌ Error saving preferences:', error);
+            }
+        }
+
+        // Initialize checkbox state based on current mode and stored preferences
+        if (highlightFacesCheckbox) {
+            if (currentStreamMode === 'hls') {
+                highlightFacesCheckbox.checked = true;
+                highlightFacesCheckbox.disabled = true;
+            } else {
+                highlightFacesCheckbox.checked = faceHighlightingEnabled;
+                highlightFacesCheckbox.disabled = false;
+            }
         }
 
         function initializeHlsPlayer(hlsUrl) {
             if (!hlsUrl) return;
-            
+
             currentHlsUrl = hlsUrl;
+            console.log('🎥 Initializing HLS player with URL:', hlsUrl);
+            showMessage(`Loading HLS stream: ${hlsUrl}`);
+
+            // Update stream stats to show HLS URL
+            if (streamStatsDiv) {
+                const currentStats = JSON.parse(streamStatsDiv.textContent || '{}');
+                currentStats.hlsUrl = hlsUrl;
+                currentStats.hlsLoadTime = new Date().toISOString();
+                streamStatsDiv.textContent = JSON.stringify(currentStats, null, 2);
+            }
+
             streamPlayerSection.classList.remove('hidden');
             videoLoading.classList.remove('hidden');
 
@@ -334,23 +447,33 @@
                     liveSyncDuration: 2,
                     liveMaxLatencyDuration: 5,
                 });
-                
+
                 hlsInstance.loadSource(hlsUrl);
                 hlsInstance.attachMedia(hlsPlayer);
-                
+
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+                    console.log('✅ HLS manifest parsed successfully for URL:', hlsUrl);
                     videoLoading.classList.add('hidden');
+
+                    // Ensure video stays inline and doesn't go fullscreen
+                    hlsPlayer.setAttribute('playsinline', 'true');
+                    hlsPlayer.setAttribute('webkit-playsinline', 'true');
+                    hlsPlayer.muted = true; // Start muted to help with autoplay
+
                     hlsPlayer.play().catch(e => {
                         console.log('Autoplay prevented:', e);
                     });
                 });
-                
+
                 hlsInstance.on(Hls.Events.ERROR, function(event, data) {
-                    console.error('HLS.js error:', data);
+                    console.error('❌ HLS.js error for URL:', hlsUrl, 'Error:', data);
                     if (data.fatal) {
                         videoLoading.textContent = 'Stream error. Retrying...';
+                        showMessage(`HLS stream error for ${hlsUrl}. Retrying...`, true);
+                        toggleStreamSettings(false); // Expand settings on error
                         setTimeout(() => {
                             if (hlsInstance) {
+                                console.log('🔄 Retrying HLS load for URL:', hlsUrl);
                                 hlsInstance.loadSource(hlsUrl);
                             }
                         }, 3000);
@@ -358,20 +481,53 @@
                 });
             } else if (hlsPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                 // Native HLS support (Safari/iOS)
+                console.log('🍎 Using native HLS support for URL:', hlsUrl);
                 hlsPlayer.src = hlsUrl;
                 videoLoading.classList.add('hidden');
+
+                // Ensure video stays inline and doesn't go fullscreen
+                hlsPlayer.setAttribute('playsinline', 'true');
+                hlsPlayer.setAttribute('webkit-playsinline', 'true');
+                hlsPlayer.muted = true; // Start muted to help with autoplay
+
                 hlsPlayer.addEventListener('loadedmetadata', function() {
                     hlsPlayer.play().catch(e => {
                         console.log('Autoplay prevented:', e);
                     });
                 });
             } else {
-                console.error('HLS is not supported in this browser');
+                console.error('❌ HLS is not supported in this browser for URL:', hlsUrl);
                 videoLoading.textContent = 'HLS not supported in this browser';
+                showMessage(`HLS not supported in this browser. URL: ${hlsUrl}`, true);
+                toggleStreamSettings(false); // Expand settings on error
             }
+
+            // Add event listeners for HLS player to handle settings collapse
+            hlsPlayer.addEventListener('play', function() {
+                if (currentHlsUrl) {
+                    toggleStreamSettings(true); // Collapse settings when HLS starts playing
+                }
+            });
+
+            hlsPlayer.addEventListener('pause', function() {
+                if (currentHlsUrl) {
+                    toggleStreamSettings(false); // Expand settings when HLS is paused
+                }
+            });
+
+            hlsPlayer.addEventListener('ended', function() {
+                if (currentHlsUrl) {
+                    toggleStreamSettings(false); // Expand settings when HLS ends
+                }
+            });
         }
 
         function stopHlsPlayer() {
+            if (currentHlsUrl) {
+                console.log('🛑 Stopping HLS player for URL:', currentHlsUrl);
+                showMessage(`Stopped HLS stream: ${currentHlsUrl}`);
+            }
+
             if (hlsInstance) {
                 hlsInstance.destroy();
                 hlsInstance = null;
@@ -379,7 +535,20 @@
             if (hlsPlayer) {
                 hlsPlayer.src = '';
             }
+
+            // Update stream stats to remove HLS URL
+            if (streamStatsDiv) {
+                const currentStats = JSON.parse(streamStatsDiv.textContent || '{}');
+                delete currentStats.hlsUrl;
+                delete currentStats.hlsLoadTime;
+                currentStats.hlsStopTime = new Date().toISOString();
+                streamStatsDiv.textContent = JSON.stringify(currentStats, null, 2);
+            }
+
             streamPlayerSection.classList.add('hidden');
+
+            // Expand settings when streaming stops
+            toggleStreamSettings(false);
         }
 
         function showMessage(text, isError = false) {
@@ -394,7 +563,7 @@
                 if (streamStatusDiv) streamStatusDiv.textContent = JSON.stringify(data.streamStatus || {}, null, 2);
                 if (streamStatsDiv) streamStatsDiv.textContent = JSON.stringify(data.streamStatus && data.streamStatus.stats ? data.streamStatus.stats : {}, null, 2);
                 updateStatusText(data.streamStatus);
-                
+
                 // Update face highlighting state and UI
                 faceHighlightingEnabled = data.faceHighlightingEnabled || false;
                 if (detectedFacesSection) {
@@ -407,8 +576,12 @@
 
                 // Handle HLS URL updates
                 if (data.hlsUrl && data.hlsUrl !== currentHlsUrl) {
+                    console.log('🔄 HLS URL changed from:', currentHlsUrl, 'to:', data.hlsUrl);
+                    showMessage(`HLS URL updated: ${data.hlsUrl}`);
                     initializeHlsPlayer(data.hlsUrl);
                 } else if (!data.hlsUrl && currentHlsUrl) {
+                    console.log('🔄 HLS URL removed, was:', currentHlsUrl);
+                    showMessage('HLS stream stopped');
                     stopHlsPlayer();
                     currentHlsUrl = '';
                 }
@@ -427,8 +600,17 @@
             }
         }
 
+        /**
+         * Fetch and display detected faces, but only if not currently editing
+         */
         async function fetchDetectedFaces() {
             if (!currentUserId || !faceHighlightingEnabled) return;
+
+            // Don't refresh if someone is actively editing a face name
+            if (isEditingFaceName) {
+                console.log('⏸️ Skipping face refresh - user is editing');
+                return;
+            }
 
             try {
                 const response = await fetch('/api/faces');
@@ -450,11 +632,13 @@
                         <img src="${face.image_data}" alt="${face.label}" class="face-image">
                         <div class="face-label">${face.label}</div>
                         <div class="rename-container">
-                            <input type="text" 
-                                   class="rename-input" 
-                                   id="rename-input-${index}" 
-                                   placeholder="New name">
-                            <button class="rename-button" 
+                            <input type="text"
+                                   class="rename-input"
+                                   id="rename-input-${index}"
+                                   placeholder="New name"
+                                   data-old-label="${face.label}"
+                                   data-input-index="${index}">
+                            <button class="rename-button"
                                     onclick="renameFace('${face.label}', ${index})">
                                 Rename
                             </button>
@@ -462,24 +646,89 @@
                     </div>
                 `).join('');
 
+                // Add event listeners for the new input fields
+                setupFaceInputEventListeners();
+
             } catch (error) {
                 console.error('Error fetching faces:', error);
                 facesContainer.innerHTML = '<div class="no-faces-message">Error loading detected faces</div>';
             }
         }
 
+        /**
+         * Set up event listeners for face input fields to handle editing state and Enter key
+         */
+        function setupFaceInputEventListeners() {
+            const inputs = document.querySelectorAll('.rename-input');
+
+            inputs.forEach(input => {
+                // Handle focus - start editing state
+                input.addEventListener('focus', function() {
+                    console.log('📝 Started editing face name');
+                    isEditingFaceName = true;
+                });
+
+                // Handle blur - end editing state (with small delay to allow for button clicks)
+                input.addEventListener('blur', function() {
+                    setTimeout(() => {
+                        // Only end editing if no other input is focused
+                        const anyInputFocused = Array.from(document.querySelectorAll('.rename-input'))
+                            .some(inp => inp === document.activeElement);
+
+                        if (!anyInputFocused) {
+                            console.log('✅ Finished editing face name');
+                            isEditingFaceName = false;
+                        }
+                    }, 100);
+                });
+
+                // Handle Enter key - save the rename
+                input.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const oldLabel = this.dataset.oldLabel;
+                        const inputIndex = parseInt(this.dataset.inputIndex);
+                        renameFace(oldLabel, inputIndex);
+                    }
+                });
+
+                // Handle Escape key - cancel editing
+                input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape') {
+                        this.value = '';
+                        this.blur();
+                    }
+                });
+            });
+        }
+
+        /**
+         * Rename a detected face with improved user experience
+         * @param {string} oldLabel - The current label of the face
+         * @param {number} inputIndex - The index of the input field
+         */
         async function renameFace(oldLabel, inputIndex) {
-            const newLabel = document.getElementById(`rename-input-${inputIndex}`).value.trim();
-            
+            const inputElement = document.getElementById(`rename-input-${inputIndex}`);
+            const newLabel = inputElement.value.trim();
+
             if (!newLabel) {
                 showMessage('Please enter a new name', true);
+                inputElement.focus(); // Keep focus for user to try again
                 return;
             }
 
             if (newLabel === oldLabel) {
                 showMessage('New name is the same as the old name', true);
+                inputElement.focus();
                 return;
             }
+
+            // Show loading state
+            const renameButton = inputElement.nextElementSibling;
+            const originalButtonText = renameButton.textContent;
+            renameButton.textContent = 'Saving...';
+            renameButton.disabled = true;
+            inputElement.disabled = true;
 
             try {
                 const response = await fetch('/api/faces/rename', {
@@ -492,14 +741,29 @@
 
                 if (result.success) {
                     showMessage(`Successfully renamed "${oldLabel}" to "${newLabel}"`);
-                    // Refresh the faces display
-                    await fetchDetectedFaces();
+
+                    // Clear the input and end editing state
+                    inputElement.value = '';
+                    inputElement.blur();
+                    isEditingFaceName = false;
+
+                    // Refresh the faces display after a short delay
+                    setTimeout(async () => {
+                        await fetchDetectedFaces();
+                    }, 500);
                 } else {
                     showMessage(result.message || 'Failed to rename face', true);
+                    inputElement.focus(); // Keep focus for user to try again
                 }
             } catch (error) {
                 console.error('Error renaming face:', error);
                 showMessage('Error renaming face', true);
+                inputElement.focus();
+            } finally {
+                // Restore button state
+                renameButton.textContent = originalButtonText;
+                renameButton.disabled = false;
+                inputElement.disabled = false;
             }
         }
 
@@ -560,25 +824,57 @@
             });
         }
 
+        if (updateSimulationVideoButton) {
+            updateSimulationVideoButton.addEventListener('click', () => {
+                const videoUrl = simulationVideoInput.value.trim();
+                if (!videoUrl) {
+                    showMessage('Please enter a video URL', true);
+                    return;
+                }
+                initializeSimulationPlayer(videoUrl);
+            });
+        }
+
         if (startStreamButton) {
             startStreamButton.addEventListener('click', async () => {
                 if (!currentUserId) { showMessage('Not authenticated. Cannot start stream.', true); return; }
-                
+
+                // Handle demo mode differently
+                if (currentStreamMode === 'simulation') {
+                    const videoUrl = simulationVideoInput.value.trim();
+                    if (!videoUrl) {
+                        showMessage('Please enter a video URL for demo mode', true);
+                        return;
+                    }
+                    initializeSimulationPlayer(videoUrl);
+                    return;
+                }
+
                 const currentRtmpUrl = rtmpUrlInput ? rtmpUrlInput.value : null;
                 let highlightFaces = highlightFacesCheckbox ? highlightFacesCheckbox.checked : false;
                 const streamMode = currentStreamMode;
-                
+
                 // Force highlight faces for HLS mode
                 if (streamMode === 'hls') {
                     highlightFaces = true;
                 }
-                
+
+                // Log current settings
+                console.log('🚀 Starting stream with settings:', {
+                    userId: currentUserId,
+                    streamMode: streamMode,
+                    rtmpUrl: currentRtmpUrl,
+                    highlightFaces: highlightFaces,
+                    faceHighlightingEnabled: faceHighlightingEnabled,
+                    hlsUrl: currentHlsUrl
+                });
+
                 showMessage('Requesting to start stream...');
                 try {
                     const response = await fetch('/api/start-stream', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
+                        body: JSON.stringify({
                             rtmpUrl: currentRtmpUrl,
                             highlightFaces: highlightFaces,
                             streamMode: streamMode
@@ -587,13 +883,15 @@
                     const result = await response.json();
                     if (result.success) {
                         showMessage('Start stream request sent successfully!');
+                        console.log('✅ Stream start request successful');
                     } else {
                         showMessage(result.message || 'Failed to start stream.', true);
+                        console.error('❌ Stream start request failed:', result.message);
                     }
                     // Status will update via polling or future websocket push
                     setTimeout(fetchStreamInfo, 1000); // Fetch after a short delay
                 } catch (error) {
-                    console.error('Error starting stream:', error);
+                    console.error('❌ Error starting stream:', error);
                     showMessage('Error starting stream.', true);
                 }
             });
@@ -602,6 +900,21 @@
         if (stopStreamButton) {
             stopStreamButton.addEventListener('click', async () => {
                 if (!currentUserId) { showMessage('Not authenticated. Cannot stop stream.', true); return; }
+
+                // Handle demo mode differently
+                if (currentStreamMode === 'simulation') {
+                    stopSimulationPlayer();
+                    return;
+                }
+
+                // Log current settings when stopping
+                console.log('🛑 Stopping stream with current settings:', {
+                    userId: currentUserId,
+                    streamMode: currentStreamMode,
+                    faceHighlightingEnabled: faceHighlightingEnabled,
+                    hlsUrl: currentHlsUrl
+                });
+
                 showMessage('Requesting to stop stream...');
                 try {
                     const response = await fetch('/api/stop-stream', {
@@ -611,13 +924,15 @@
                     const result = await response.json();
                     if (result.success) {
                         showMessage('Stop stream request sent successfully!');
+                        console.log('✅ Stream stop request successful');
                         stopHlsPlayer(); // Stop the player immediately
                     } else {
                         showMessage(result.message || 'Failed to stop stream.', true);
+                        console.error('❌ Stream stop request failed:', result.message);
                     }
                     setTimeout(fetchStreamInfo, 1000); // Fetch after a short delay
                 } catch (error) {
-                    console.error('Error stopping stream:', error);
+                    console.error('❌ Error stopping stream:', error);
                     showMessage('Error stopping stream.', true);
                 }
             });
@@ -631,16 +946,60 @@
 
         // Initial fetch and periodic refresh
         fetchStreamInfo();
-        setInterval(fetchStreamInfo, 5000); // Refresh every 5 seconds
+
+        // Only set up regular polling for non-simulation modes
+        setInterval(() => {
+            if (currentStreamMode !== 'simulation') {
+                fetchStreamInfo();
+            }
+        }, 5000);
+
+        // Set up demo status updates
+        setInterval(() => {
+            if (currentStreamMode === 'simulation' && isSimulationActive) {
+                updateSimulationStatus();
+            }
+        }, 1000); // Update demo stats every second
 
         // Fetch faces initially and periodically if face highlighting is enabled
         if (faceHighlightingEnabled) {
             fetchDetectedFaces();
-            setInterval(() => {
-                if (faceHighlightingEnabled) {
+
+            // Set up periodic refresh with editing state awareness
+            faceRefreshInterval = setInterval(() => {
+                if (faceHighlightingEnabled && !isEditingFaceName) {
                     fetchDetectedFaces();
+                } else if (isEditingFaceName) {
+                    console.log('⏸️ Skipping scheduled face refresh - user is editing');
                 }
-            }, 10000); // Refresh faces every 10 seconds
+            }, 10000); // Refresh faces every 10 seconds (when not editing)
+        }
+
+        /**
+         * Start face detection refresh interval
+         */
+        function startFaceRefreshInterval() {
+            if (faceRefreshInterval) {
+                clearInterval(faceRefreshInterval);
+            }
+
+            faceRefreshInterval = setInterval(() => {
+                if (faceHighlightingEnabled && !isEditingFaceName) {
+                    fetchDetectedFaces();
+                } else if (isEditingFaceName) {
+                    console.log('⏸️ Skipping scheduled face refresh - user is editing');
+                }
+            }, 10000);
+        }
+
+        /**
+         * Stop face detection refresh interval
+         */
+        function stopFaceRefreshInterval() {
+            if (faceRefreshInterval) {
+                clearInterval(faceRefreshInterval);
+                faceRefreshInterval = null;
+            }
         }
 
         // Update status text on load
@@ -649,7 +1008,226 @@
 
         // Initialize HLS player if URL is already available
         if (currentHlsUrl) {
+            console.log('🚀 Page loaded with initial HLS URL:', currentHlsUrl);
+            showMessage(`Initial HLS stream loaded: ${currentHlsUrl}`);
             initializeHlsPlayer(currentHlsUrl);
+        } else {
+            console.log('📺 Page loaded with no HLS URL');
+        }
+
+        // Initialize based on current mode
+        if (currentStreamMode === 'simulation') {
+            rtmpUrlSection.classList.add('dimmed');
+            simulationUrlSection.classList.remove('dimmed');
+        } else if (currentStreamMode === 'rtmp') {
+            simulationUrlSection.classList.add('dimmed');
+        } else {
+            simulationUrlSection.classList.add('dimmed');
+        }
+
+        /**
+         * Load a sample video URL into the demo input
+         * @param {string} videoUrl - The video URL to load
+         */
+        function loadSampleVideo(videoUrl) {
+            simulationVideoInput.value = videoUrl;
+            showMessage(`Demo video loaded: ${videoUrl}`);
+        }
+
+        /**
+         * Collapse or expand the stream settings section
+         * @param {boolean} collapse - Whether to collapse (true) or expand (false) the settings
+         */
+        function toggleStreamSettings(collapse) {
+            const streamActions = document.getElementById('streamActions');
+            if (!streamActions) return;
+
+            if (collapse) {
+                streamActions.style.display = 'none';
+            } else {
+                streamActions.style.display = 'block';
+            }
+        }
+
+        /**
+         * Initialize demo player with a video URL to appear as glasses streaming
+         * @param {string} videoUrl - The video URL to play
+         */
+        function initializeSimulationPlayer(videoUrl) {
+            if (!videoUrl) {
+                showMessage('Please enter a video URL for demo mode', true);
+                return;
+            }
+
+            simulationVideoUrl = videoUrl;
+            console.log('🎥 Initializing glasses stream with content:', videoUrl);
+            showMessage(`Connecting to glasses...`);
+
+            // Stop any existing HLS instance
+            if (hlsInstance) {
+                hlsInstance.destroy();
+                hlsInstance = null;
+            }
+
+            // Update stream stats to show realistic streaming info
+            if (streamStatsDiv) {
+                const streamStats = {
+                    glasses_connected: true,
+                    camera_active: true,
+                    stream_key: `user_${currentUserId.replace(/[@]/g, '_')}`,
+                    bitrate: '2500 kbps',
+                    resolution: '1920x1080',
+                    fps: '30 fps',
+                    status: 'initializing'
+                };
+                streamStatsDiv.textContent = JSON.stringify(streamStats, null, 2);
+            }
+
+            streamPlayerSection.classList.remove('hidden');
+            videoLoading.classList.remove('hidden');
+            videoLoading.textContent = 'Connecting to glasses camera...';
+
+            // Set up the video player for demo
+            hlsPlayer.src = videoUrl;
+            hlsPlayer.load();
+
+            hlsPlayer.addEventListener('loadedmetadata', function() {
+                console.log('✅ Glasses connected and streaming');
+                videoLoading.classList.add('hidden');
+                isSimulationActive = true;
+                simulationStartTime = Date.now();
+
+                // Ensure video stays inline and doesn't go fullscreen
+                hlsPlayer.setAttribute('playsinline', 'true');
+                hlsPlayer.setAttribute('webkit-playsinline', 'true');
+                hlsPlayer.muted = true; // Start muted to help with autoplay
+
+                // Update status to show streaming
+                updateSimulationStatus();
+
+                hlsPlayer.play().catch(e => {
+                    console.log('Autoplay prevented:', e);
+                    showMessage('Glasses connected. Click to start viewing.', false);
+                });
+            });
+
+            hlsPlayer.addEventListener('error', function(e) {
+                console.error('❌ Glasses connection error:', e);
+                videoLoading.textContent = 'Connection error. Please check glasses.';
+                showMessage(`Failed to connect to glasses camera`, true);
+                isSimulationActive = false;
+                toggleStreamSettings(false); // Expand settings on error
+            });
+
+            hlsPlayer.addEventListener('play', function() {
+                if (isSimulationActive) {
+                    showMessage('Glasses streaming active - live feed connected!');
+                    updateSimulationStatus();
+                    toggleStreamSettings(true); // Collapse settings when streaming starts
+                }
+            });
+
+            hlsPlayer.addEventListener('pause', function() {
+                if (isSimulationActive) {
+                    showMessage('Stream paused');
+                    updateSimulationStatus();
+                    toggleStreamSettings(false); // Expand settings when paused
+                }
+            });
+
+            hlsPlayer.addEventListener('ended', function() {
+                if (isSimulationActive) {
+                    showMessage('Stream restarting...');
+                    // Loop the video for continuous streaming
+                    hlsPlayer.currentTime = 0;
+                    hlsPlayer.play();
+                }
+            });
+        }
+
+        /**
+         * Update status with realistic streaming data from glasses
+         */
+        function updateSimulationStatus() {
+            if (!isSimulationActive || !simulationStartTime) return;
+
+            const now = Date.now();
+            const streamDuration = Math.floor((now - simulationStartTime) / 1000);
+            const isPlaying = !hlsPlayer.paused && !hlsPlayer.ended;
+
+            // Create realistic stream status that looks like actual glasses streaming
+            const streamStatus = {
+                status: isPlaying ? 'active' : 'paused',
+                stream_key: `user_${currentUserId.replace(/[@]/g, '_')}`,
+                start_time: new Date(simulationStartTime).toISOString(),
+                duration_seconds: streamDuration,
+                glasses_connected: true,
+                camera_active: true,
+                stats: {
+                    device_type: 'AugmentOS Glasses',
+                    camera_resolution: '1920x1080',
+                    stream_duration: streamDuration,
+                    bitrate_kbps: 2500 + Math.floor(Math.random() * 500), // Simulate varying bitrate
+                    fps: 30,
+                    frames_streamed: streamDuration * 30, // 30 fps
+                    bytes_sent: streamDuration * 312500, // ~2.5 Mbps
+                    battery_level: Math.max(20, 100 - Math.floor(streamDuration / 60)), // Slowly decrease battery
+                    temperature: 35 + Math.floor(Math.random() * 5), // Realistic device temperature
+                    network_quality: ['excellent', 'good', 'fair'][Math.floor(Math.random() * 3)],
+                    last_update: new Date().toISOString()
+                }
+            };
+
+            // Update status displays
+            if (streamStatusDiv) {
+                streamStatusDiv.textContent = JSON.stringify(streamStatus, null, 2);
+            }
+            if (streamStatsDiv) {
+                streamStatsDiv.textContent = JSON.stringify(streamStatus.stats, null, 2);
+            }
+            updateStatusText(streamStatus);
+        }
+
+        /**
+         * Stop glasses streaming
+         */
+        function stopSimulationPlayer() {
+            if (simulationVideoUrl) {
+                console.log('🛑 Disconnecting from glasses');
+                showMessage(`Glasses stream disconnected`);
+            }
+
+            isSimulationActive = false;
+            simulationStartTime = null;
+
+            if (hlsPlayer) {
+                hlsPlayer.pause();
+                hlsPlayer.src = '';
+            }
+
+            // Update stream stats to show stopped
+            if (streamStatsDiv) {
+                const stoppedStats = {
+                    glasses_connected: false,
+                    camera_active: false,
+                    status: 'stopped',
+                    stop_time: new Date().toISOString(),
+                    last_session_duration: simulationStartTime ? Math.floor((Date.now() - simulationStartTime) / 1000) : 0
+                };
+                streamStatsDiv.textContent = JSON.stringify(stoppedStats, null, 2);
+            }
+
+            streamPlayerSection.classList.add('hidden');
+
+            // Update status to show stopped
+            const stoppedStatus = { status: 'stopped', glasses_connected: false };
+            updateStatusText(stoppedStatus);
+            if (streamStatusDiv) {
+                streamStatusDiv.textContent = JSON.stringify(stoppedStatus, null, 2);
+            }
+
+            // Expand settings when streaming stops
+            toggleStreamSettings(false);
         }
 
     </script>
